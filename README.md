@@ -1,0 +1,1 @@
+# ai-structure-generator
