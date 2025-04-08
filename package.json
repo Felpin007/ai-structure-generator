@@ -1,0 +1,57 @@
+{
+  "name": "ai-structure-generator",
+  "displayName": "AI Code Structure Generator",
+  "description": "Generates project file structures from a specific JSON format, ideal for use with AI models like Google Gemini. Paste the AI-generated JSON to create files and folders.",
+  "publisher": "FelpolinColorado",
+  "version": "0.0.2",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:geminiStructureView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "structure-generator-view-container",
+          "title": "AI Structure Gen",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "structure-generator-view-container": [
+        {
+          "id": "geminiStructureView",
+          "name": "Generate Structure",
+          "type": "webview",
+          "contextualTitle": "AI Structure Generator"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.99.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/parser": "^8.28.0",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.2",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
