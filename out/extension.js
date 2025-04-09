@@ -1,4 +1,5 @@
 "use strict";
+// extension.ts (Modificado)
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -38,173 +39,152 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const StructureViewProvider_1 = require("./StructureViewProvider"); // Import the new provider
-// --- Helper Functions ---
+const StructureViewProvider_1 = require("./StructureViewProvider");
+// --- Helper Functions (Manter como antes) ---
 function escapePath(p) {
-    // Escape single quotes for PowerShell strings and normalize path separators
-    return p.replace(/'/g, "''").replace(/\//g, '\\');
+    // Normaliza para barras invertidas e escapa apóstrofos para PowerShell
+    const normalized = p.replace(/\//g, '\\');
+    // Garante que não comece com \ se for relativo, pois será juntado com workspaceRoot
+    const relativePath = normalized.startsWith('\\') ? normalized.substring(1) : normalized;
+    return relativePath.replace(/'/g, "''");
 }
-// *** CORRECTED HELPER FUNCTION ***
 function contentForHereString(lines) {
-    // No escaping needed for literal Here-String content (@'...')
+    // Junta as linhas para o Here-String do PowerShell. NENHUM escape extra é necessário aqui.
+    // Apenas precisamos garantir que a string não contenha '@ sozinhos em uma linha,
+    // o que é raro em código, mas pode acontecer. Por segurança, podemos substituir,
+    // embora seja um caso extremo. Vamos manter simples por enquanto.
     return lines.join('\n');
+}
+// --- Nova Função de Parsing ---
+function parseCustomFormat(inputText) {
+    const operations = [];
+    // Regex para encontrar <comando>...</comando> OU <codigo ref="...">...</codigo>
+    // g = global, i = case-insensitive (para tags), s = dotall (. corresponde a newline)
+    const tagRegex = /<comando>(.*?)<\/comando>|<codigo ref="(.*?)">(.*?)<\/codigo>/gis;
+    let match;
+    // Limpa o início opcional "PARA CRIAÇÃO/EDIÇÃO" etc.
+    let relevantText = inputText.split(/^-{5,}\s*$/m).pop() || inputText; // Pega a parte depois da última linha '----'
+    relevantText = relevantText.replace(/<texto>.*?<\/texto>/gis, '');
+    while ((match = tagRegex.exec(relevantText)) !== null) {
+        if (match[1] !== undefined) { // É um <comando>
+            const command = match[1].trim();
+            if (command) { // Evita adicionar comandos vazios
+                operations.push({ type: 'command', value: command });
+            }
+        }
+        else if (match[2] !== undefined && match[3] !== undefined) { // É um <codigo>
+            const filePath = match[2].trim();
+            // Divide o conteúdo em linhas, tratando diferentes tipos de newline
+            const codeContent = match[3].trim().split(/\r?\n/);
+            if (filePath) { // Garante que o path não está vazio
+                operations.push({ type: 'code', value: filePath, content: codeContent });
+            }
+        }
+    }
+    // Poderíamos adicionar aqui um log ou tratamento se nenhuma operação for encontrada
+    if (operations.length === 0) {
+        console.warn("Nenhuma operação <comando> ou <codigo> encontrada no input.");
+        vscode.window.showWarningMessage("Nenhuma operação <comando> ou <codigo> válida encontrada no texto fornecido.");
+    }
+    return operations;
 }
 // --- Main Activation Function ---
 function activate(context) {
-    console.log('Extension "gemini-structure-generator" is now active!');
+    console.log('Extension "ai-structure-generator" (adaptado) is now active!');
     // --- Register the Webview View Provider ---
     const provider = new StructureViewProvider_1.StructureViewProvider(context.extensionUri, context);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(StructureViewProvider_1.StructureViewProvider.viewType, provider));
-    // --- Register the command that the Webview will call ---
-    context.subscriptions.push(vscode.commands.registerCommand('gemini-structure-generator.processPastedJson', async (rawJsonString) => {
-        // Get the current workspace folder
+    // --- Register the command (renomeado para refletir a mudança) ---
+    context.subscriptions.push(vscode.commands.registerCommand('ai-structure-generator.processPastedStructure', async (rawInputText) => {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
-            vscode.window.showErrorMessage('No workspace folder open. Please open the folder where you want to generate the structure.');
+            vscode.window.showErrorMessage('Nenhuma pasta de workspace aberta. Abra a pasta onde deseja gerar a estrutura.');
             return;
         }
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        const jsonFilePath = path.join(workspaceRoot, 'conteudo.json');
-        // --- Clean the input string ---
-        let cleanedJsonString = rawJsonString.trim();
-        cleanedJsonString = cleanedJsonString.replace(/^\s*```(?:json)?\s*\n?/, '');
-        cleanedJsonString = cleanedJsonString.replace(/\n?\s*```\s*$/, '');
+        // Opcional: Salvar o texto bruto recebido
+        const rawInputPath = path.join(workspaceRoot, 'last_structure_input.txt');
+        // --- Limpar o input (remover fences se ainda usados por acidente) ---
+        let cleanedInput = rawInputText.trim();
+        cleanedInput = cleanedInput.replace(/^\s*```.*\s*\n?/, ''); // Remove ```tipo no início
+        cleanedInput = cleanedInput.replace(/\n?\s*```\s*$/, ''); // Remove ``` no final
         try {
-            // 1. Parse the CLEANED JSON first
-            let data;
-            try {
-                data = JSON.parse(cleanedJsonString);
+            // 1. Parse o texto com o novo formato
+            const operations = parseCustomFormat(cleanedInput);
+            if (operations.length === 0) {
+                // Mensagem já mostrada pelo parser, mas podemos evitar continuar
+                return;
             }
-            catch (error) {
-                vscode.window.showErrorMessage(`Invalid JSON format after cleaning fences: ${error instanceof Error ? error.message : String(error)}`);
-                return; // Stop processing
-            }
-            // 2. Write the CLEANED string to file AFTER successful parse
+            // 2. Opcional: Escrever o texto bruto recebido
             try {
-                fs.writeFileSync(jsonFilePath, cleanedJsonString, 'utf-8');
-                vscode.window.showInformationMessage('conteudo.json has been updated/created.');
+                fs.writeFileSync(rawInputPath, cleanedInput, 'utf-8');
+                vscode.window.showInformationMessage('last_structure_input.txt foi atualizado/criado.');
             }
             catch (writeError) {
-                vscode.window.showErrorMessage(`Failed to write to conteudo.json: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
-                // return; // Consider stopping
+                vscode.window.showErrorMessage(`Falha ao escrever em last_structure_input.txt: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+                // Continuar mesmo assim? Ou retornar? Decidi continuar.
             }
-            // 3. Generate and Execute PowerShell Script, passing extensionPath
-            await generateAndExecuteScript(data, workspaceRoot, context.extensionPath); // Pass extensionPath
+            // 3. Gerar e Executar Script PowerShell com base nas operações
+            await generateAndExecuteScript(operations, workspaceRoot);
         }
         catch (error) {
-            vscode.window.showErrorMessage(`Error processing structure generation: ${error instanceof Error ? error.message : String(error)}`);
+            vscode.window.showErrorMessage(`Erro ao processar geração de estrutura: ${error instanceof Error ? error.message : String(error)}`);
             console.error("Structure Generation Error:", error);
         }
     }));
 }
 // --- Function to Generate and Execute the Script ---
-// Added extensionPath parameter
-async function generateAndExecuteScript(data, workspaceRoot, extensionPath) {
-    let baseDir = '';
-    let errorOverlayFinalPath = '';
-    // --- Determine Base Directory from commands ---
-    if (data.comando_no_terminal && Array.isArray(data.comando_no_terminal)) {
-        const mkdirRegex = /^\s*mkdir\s+["']?([^"']+)["']?/;
-        for (const cmd of data.comando_no_terminal) {
-            const match = cmd.match(mkdirRegex);
-            if (match && match[1]) {
-                baseDir = match[1];
-                break;
-            }
-        }
-    }
-    if (!baseDir) {
-        vscode.window.showWarningMessage('Could not determine base directory from "comando_no_terminal". error-overlay.js might be placed incorrectly if not created by commands.');
-    }
-    errorOverlayFinalPath = path.join(workspaceRoot, baseDir, 'error-overlay.js');
-    // --- Read Error Overlay Content from src/texto.txt ---
-    let errorOverlaySourceContent = '';
-    try {
-        const templatePath = path.join(extensionPath, 'src', 'texto.txt');
-        errorOverlaySourceContent = fs.readFileSync(templatePath, 'utf-8');
-    }
-    catch (readError) {
-        vscode.window.showErrorMessage(`Failed to read src/texto.txt: ${readError instanceof Error ? readError.message : String(readError)}`);
-        return;
-    }
-    // --- Prepare PowerShell Script Lines ---
+async function generateAndExecuteScript(operations, workspaceRoot) {
     const scriptLines = [];
     let terminal;
-    // --- Add Structure Commands ---
-    if (data.comando_no_terminal && Array.isArray(data.comando_no_terminal) && data.comando_no_terminal.length > 0) {
-        scriptLines.push('# --- Executing Structure Commands from JSON ---');
-        data.comando_no_terminal.forEach(cmd => {
-            if (typeof cmd === 'string') {
-                if (!cmd.includes('error-overlay.js')) {
-                    scriptLines.push(cmd);
-                }
-                else {
-                    console.log(`Skipping command that might interfere with error-overlay.js creation: ${cmd}`);
-                }
-            }
-        });
-        scriptLines.push('');
-    }
-    else {
-        if (!baseDir) {
-            vscode.window.showWarningMessage('No structure commands found and base directory could not be determined.');
-        }
-    }
-    // --- Add Content Writing Commands for PARTE N ---
-    scriptLines.push('# --- Writing File Contents (PARTE N) ---');
-    let contentCommandsAdded = false;
-    for (const key in data) {
-        if (key.startsWith("PARTE ") && key !== "PARTE ESTRUTURAL") {
-            const parte = data[key];
-            if (parte && typeof parte === 'object' && !Array.isArray(parte) && parte.arquivo && Array.isArray(parte.codigo)) {
-                const filePath = path.join(workspaceRoot, parte.arquivo);
-                if (path.normalize(filePath).toLowerCase() === path.normalize(errorOverlayFinalPath).toLowerCase()) {
-                    console.log(`Skipping PARTE entry for error-overlay.js, will be handled later.`);
-                    continue;
-                }
-                // *** USE CORRECTED HELPER FUNCTION ***
-                const fileContent = contentForHereString(parte.codigo);
-                scriptLines.push(`$content = @'\n${fileContent}\n'@`);
-                scriptLines.push(`Set-Content -Path '${escapePath(filePath)}' -Value $content -Encoding UTF8 -ErrorAction Stop`);
-                scriptLines.push('');
-                contentCommandsAdded = true;
-            }
-            else if (key !== "texto_final" && key !== "comando_no_terminal") {
-                vscode.window.showWarningMessage(`Invalid format or missing data for ${key} in conteudo.json. Skipping content write.`);
-            }
-        }
-    }
-    // --- Add Content Writing Command for error-overlay.js (using content from texto.txt) ---
+    scriptLines.push('# --- Executando Operações de Estrutura e Conteúdo ---');
     scriptLines.push('');
-    scriptLines.push('# --- Writing error-overlay.js ---');
-    const errorOverlayDir = path.dirname(errorOverlayFinalPath);
-    scriptLines.push(`New-Item -Path '${escapePath(errorOverlayDir)}' -ItemType Directory -ErrorAction SilentlyContinue | Out-Null`);
-    // Use content read from the source file directly
-    // *** NO LONGER NEED TO ESCAPE HERE EITHER ***
-    scriptLines.push(`$errorOverlayContent = @'\n${errorOverlaySourceContent.trim()}\n'@`);
-    scriptLines.push(`Set-Content -Path '${escapePath(errorOverlayFinalPath)}' -Value $errorOverlayContent -Encoding UTF8 -ErrorAction Stop`);
-    scriptLines.push('');
+    operations.forEach((op, index) => {
+        if (op.type === 'command') {
+            scriptLines.push(`# Comando ${index + 1}`);
+            scriptLines.push(op.value); // Adiciona o comando diretamente
+            scriptLines.push('');
+        }
+        else if (op.type === 'code' && op.content) {
+            // Trata caminhos relativos corretamente a partir do workspaceRoot
+            const filePath = path.join(workspaceRoot, op.value); // op.value é o path do <codigo ref="...">
+            const fileDir = path.dirname(filePath);
+            scriptLines.push(`# Escrevendo Arquivo ${index + 1}: ${op.value}`);
+            // Garante que o diretório existe ANTES de tentar escrever o arquivo
+            scriptLines.push(`New-Item -Path '${escapePath(fileDir)}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null`); // -Force para não dar erro se já existir
+            const fileContent = contentForHereString(op.content);
+            scriptLines.push(`$content = @'\n${fileContent}\n'@`);
+            // Usar escapePath no caminho final do arquivo
+            scriptLines.push(`Set-Content -Path '${escapePath(filePath)}' -Value $content -Encoding UTF8 -Force -ErrorAction Stop`); // -Force para sobrescrever se existir
+            scriptLines.push('');
+        }
+    });
     // --- Execute Script in Terminal ---
+    // Filtrar linhas vazias ou comentários para verificar se há algo a executar
     const commandsToExecute = scriptLines.filter(line => line && line.trim() && !line.trim().startsWith('#'));
     if (commandsToExecute.length > 0) {
         terminal = vscode.window.terminals.find(t => t.name === "Structure Generator");
         if (!terminal || terminal.exitStatus !== undefined) {
             terminal = vscode.window.createTerminal({
                 name: "Structure Generator",
-                shellPath: "powershell.exe"
+                shellPath: "powershell.exe",
+                // cwd: workspaceRoot // Definir o diretório de trabalho inicial
             });
         }
         terminal.show();
+        // Garante que estamos no diretório correto do workspace antes de executar
+        // Usa escapePath aqui também para o caminho do workspace
         terminal.sendText(`cd '${escapePath(workspaceRoot)}'`);
+        // Envia cada linha do script gerado para o terminal
         scriptLines.forEach(line => {
-            if (line && line.trim()) {
+            if (line.trim()) { // Evita enviar linhas totalmente vazias
                 terminal?.sendText(line);
             }
         });
-        vscode.window.showInformationMessage('Structure generation commands sent to terminal.');
+        vscode.window.showInformationMessage('Comandos de geração de estrutura enviados ao terminal.');
     }
     else {
-        vscode.window.showErrorMessage('No structure or content commands were generated to execute.');
+        vscode.window.showWarningMessage('Nenhum comando ou operação de escrita de arquivo foi gerado para executar.');
     }
 }
 // --- Deactivation Function (keep as before) ---

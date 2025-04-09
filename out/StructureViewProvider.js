@@ -1,3 +1,4 @@
+
 "use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -38,28 +39,23 @@ const vscode = __importStar(require("vscode"));
 class StructureViewProvider {
     _extensionUri;
     _context;
-    static viewType = 'geminiStructureView'; // Must match the view ID in package.json
+    static viewType = 'geminiStructureView';
     _view;
-    constructor(_extensionUri, _context // Pass context if needed for state
-    ) {
+    constructor(_extensionUri, _context) {
         this._extensionUri = _extensionUri;
         this._context = _context;
     }
     resolveWebviewView(webviewView, context, _token) {
         this._view = webviewView;
         webviewView.webview.options = {
-            // Allow scripts in the webview
             enableScripts: true,
-            // Restrict the webview to only loading content from our extension's directory.
             localResourceRoots: [this._extensionUri]
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-        // Handle messages from the webview
         webviewView.webview.onDidReceiveMessage(message => {
             switch (message.command) {
                 case 'generateStructure':
-                    // Send the pasted content to the extension's main logic
-                    vscode.commands.executeCommand('gemini-structure-generator.processPastedJson', message.text);
+                    vscode.commands.executeCommand('ai-structure-generator.processPastedStructure', message.text);
                     return;
                 case 'showError':
                     vscode.window.showErrorMessage(message.text);
@@ -67,29 +63,43 @@ class StructureViewProvider {
             }
         }, undefined, this._context.subscriptions);
     }
-    // Optional: Add a method to send messages to the webview if needed later
-    // public sendMessage(message: any) {
-    //     if (this._view) {
-    //         this._view.webview.postMessage(message);
-    //     }
-    // }
     _getHtmlForWebview(webview) {
-        // Get the local path to main script run in the webview, then convert it to a uri we can use in the webview.
-        // const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
-        // Use a nonce to only allow specific scripts to be run
         const nonce = getNonce();
+        const placeholder = `Cole a estrutura aqui... Exemplo:
+
+PARTE ESTRUTURAL:
+<texto>Aqui está a estrutura base:</texto>
+<estrutura>
+.
+├── css/
+│   └── style.css
+└── index.html
+</estrutura>
+
+<comando>mkdir css</comando>
+
+<codigo ref="./index.html">
+<!DOCTYPE html>
+<html>
+...
+</html>
+</codigo>
+
+<codigo ref="./css/style.css">
+body {
+  margin: 0;
+}
+</codigo>
+`;
         return `<!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <!--
-                    Use a content security policy to only allow loading images from https or from our extension directory,
-                    and only allow scripts that have a specific nonce.
-                -->
                 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} https:; script-src 'nonce-${nonce}';">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Structure Generator Input</title>
                 <style>
+                    /* Estilos gerais */
                     body {
                         font-family: var(--vscode-font-family);
                         color: var(--vscode-editor-foreground);
@@ -98,10 +108,17 @@ class StructureViewProvider {
                         height: 100vh;
                         display: flex;
                         flex-direction: column;
+                        box-sizing: border-box; /* Inclui padding na altura total */
+                    }
+                    label {
+                        display: block;
+                        margin-bottom: 5px;
+                        font-size: 0.9em;
+                        flex-shrink: 0; /* Não permite que o label encolha */
                     }
                     textarea {
-                        flex-grow: 1; /* Take remaining height */
-                        width: calc(100% - 20px); /* Full width minus padding */
+                        flex-grow: 1; /* Tenta crescer para preencher o espaço */
+                        width: calc(100% - 12px); /* Largura total menos borda */
                         margin-bottom: 10px;
                         border: 1px solid var(--vscode-input-border);
                         background-color: var(--vscode-input-background);
@@ -109,7 +126,14 @@ class StructureViewProvider {
                         font-family: var(--vscode-editor-font-family);
                         font-size: var(--vscode-editor-font-size);
                         padding: 5px;
-                        resize: none; /* Disable manual resize */
+                        resize: none;
+                        white-space: pre; /* Preserva espaços/quebras de linha no placeholder */
+                        overflow-y: auto; /* Adiciona barra de rolagem vertical se necessário */
+
+                        /* *** NOVO: Limita a altura máxima *** */
+                        max-height: 90vh; /* Limita a altura a 70% da altura da viewport */
+                        /* Ou use um valor fixo se preferir, ex: max-height: 500px; */
+                        /* Removemos flex-shrink:0 para permitir encolher se necessário */
                     }
                     button {
                         padding: 8px 15px;
@@ -118,48 +142,35 @@ class StructureViewProvider {
                         color: var(--vscode-button-foreground);
                         border: 1px solid var(--vscode-button-border);
                         border-radius: 3px;
-                        align-self: flex-start; /* Align button to the left */
+                        align-self: flex-start;
+                        flex-shrink: 0; /* Não permite que o botão encolha */
                     }
                     button:hover {
                         background-color: var(--vscode-button-hoverBackground);
                     }
-                    label {
-                        display: block;
-                        margin-bottom: 5px;
-                        font-size: 0.9em;
-                    }
                 </style>
             </head>
             <body>
-                <label for="jsonInput">Paste JSON content here:</label>
-                <textarea id="jsonInput" placeholder='Paste the JSON structure here...\n{\n  "comando_no_terminal": [\n    "mkdir my-project",\n    "cd my-project",\n    ...\n  ],\n  "PARTE 1": {\n    "arquivo": "my-project/file.txt",\n    "codigo": [\n      "Line 1",\n      "Line 2"\n    ]\n  },\n  ...\n}'></textarea>
+                <label for="structureInput">Cole o texto da estrutura aqui:</label>
+                <textarea id="structureInput" placeholder="${placeholder.replace(/"/g, '"')}"></textarea>
                 <button id="generateButton">Generate Structure</button>
 
                 <script nonce="${nonce}">
                     const vscode = acquireVsCodeApi();
                     const generateButton = document.getElementById('generateButton');
-                    const jsonInput = document.getElementById('jsonInput');
+                    const structureInput = document.getElementById('structureInput');
 
                     generateButton.addEventListener('click', () => {
-                        const text = jsonInput.value;
+                        const text = structureInput.value;
                         if (text && text.trim().length > 0) {
-                            try {
-                                // Basic validation: Check if it's likely JSON
-                                JSON.parse(text); 
-                                vscode.postMessage({
-                                    command: 'generateStructure',
-                                    text: text
-                                });
-                            } catch (e) {
-                                vscode.postMessage({
-                                    command: 'showError',
-                                    text: 'Invalid JSON pasted: ' + (e instanceof Error ? e.message : String(e))
-                                });
-                            }
+                            vscode.postMessage({
+                                command: 'generateStructure',
+                                text: text
+                            });
                         } else {
                              vscode.postMessage({
                                 command: 'showError',
-                                text: 'Please paste JSON content into the text area.'
+                                text: 'Por favor, cole o texto da estrutura na área designada.'
                             });
                         }
                     });
@@ -169,6 +180,7 @@ class StructureViewProvider {
     }
 }
 exports.StructureViewProvider = StructureViewProvider;
+// Função getNonce permanece a mesma
 function getNonce() {
     let text = '';
     const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
